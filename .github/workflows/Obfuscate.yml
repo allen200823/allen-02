@@ -1,0 +1,90 @@
+name: BPB Worker Panel Obfuscation Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'build/unobfuscated-worker.js'  # 仅在源文件变更时触发
+  schedule:
+    # 每天 UTC 时间 1:00 AM 运行
+    - cron: "0 1 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true  # 避免并发运行
+
+permissions:
+  contents: write
+
+jobs:
+  obfuscate:
+    name: Obfuscate Worker Script
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_URL: https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/main/build/unobfuscated-worker.js
+      OUTPUT_FILE: _worker.js
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: 'npm'  # 仅在有package.json时启用
+
+      - name: Install javascript-obfuscator
+        run: npm install -g javascript-obfuscator@latest
+        # 明确指定最新版本而非隐式latest
+
+      - name: Download source script
+        run: |
+          echo "Downloading source from $SOURCE_URL"
+          curl -sSL -o origin.js "$SOURCE_URL"
+          echo "Downloaded $(stat -c%s origin.js) bytes"
+        # 使用curl替代wget，更好的错误处理
+
+      - name: Verify source script
+        run: |
+          if [ ! -s origin.js ]; then
+            echo "Error: Downloaded file is empty"
+            exit 1
+          fi
+          echo "Source script verification passed"
+
+      - name: Obfuscate script
+        run: |
+          echo "Starting obfuscation process..."
+          javascript-obfuscator origin.js \
+            --output $OUTPUT_FILE \
+            --compact true \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 1 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 1 \
+            --identifier-names-generator hexadecimal \
+            --rename-globals true \
+            --string-array true \
+            --string-array-encoding 'rc4' \
+            --string-array-threshold 1 \
+            --transform-object-keys true \
+            --unicode-escape-sequence true
+          
+          echo "Obfuscation completed. Output size: $(stat -c%s $OUTPUT_FILE) bytes"
+
+      - name: Commit changes
+        if: success()
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          branch: main
+          commit_message: 'chore: Update obfuscated worker script [automated]'
+          commit_author: 'Automation Bot <bot@noreply.github.com>'
+          file_pattern: '_worker.js'
+          skip_checkout: true
+          add_options: '-f'  # 强制添加文件
